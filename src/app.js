@@ -246,6 +246,20 @@ class Application {
         logger.info('✅ Admin SPA (next) static files mounted at /admin-next/')
       } else {
         logger.warn('⚠️ Admin SPA dist directory not found, skipping /admin-next route')
+
+        const hintMessage = {
+          error: 'Admin UI not built',
+          message: 'web/admin-spa/dist 缺失，请运行 npm run install:web && npm run build:web 后重启服务',
+          timestamp: new Date().toISOString()
+        }
+
+        this.app.get(['/admin-next', '/admin-next/'], (req, res) => {
+          res.status(503).json(hintMessage)
+        })
+
+        this.app.get('/admin-next/*', (req, res) => {
+          res.status(503).json(hintMessage)
+        })
       }
 
       // 🛣️ 路由

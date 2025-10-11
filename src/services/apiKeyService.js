@@ -39,7 +39,11 @@ class ApiKeyService {
       activationDays = 0, // 新增：激活后有效天数（0表示不使用此功能）
       activationUnit = 'days', // 新增：激活时间单位 'hours' 或 'days'
       expirationMode = 'fixed', // 新增：过期模式 'fixed'(固定时间) 或 'activation'(首次使用后激活)
-      icon = '' // 新增：图标（base64编码）
+      icon = '', // 新增：图标（base64编码）
+      // 🆕 多账号绑定配置
+      boundAccounts = [], // 绑定的账号列表
+      schedulingStrategy = 'weighted', // 调度策略: weighted/latency/hybrid
+      enableLatencyOptimization = false // 是否启用延迟优化
     } = options
 
     // 生成简单的API Key (64字符十六进制)
@@ -84,7 +88,11 @@ class ApiKeyService {
       createdBy: options.createdBy || 'admin',
       userId: options.userId || '',
       userUsername: options.userUsername || '',
-      icon: icon || '' // 新增：图标（base64编码）
+      icon: icon || '', // 新增：图标（base64编码）
+      // 🆕 多账号绑定配置
+      boundAccounts: JSON.stringify(boundAccounts || []),
+      schedulingStrategy: schedulingStrategy || 'weighted',
+      enableLatencyOptimization: String(enableLatencyOptimization || false)
     }
 
     // 保存API Key数据并建立哈希映射
@@ -125,7 +133,11 @@ class ApiKeyService {
       activatedAt: keyData.activatedAt,
       createdAt: keyData.createdAt,
       expiresAt: keyData.expiresAt,
-      createdBy: keyData.createdBy
+      createdBy: keyData.createdBy,
+      // 🆕 多账号绑定配置
+      boundAccounts: JSON.parse(keyData.boundAccounts || '[]'),
+      schedulingStrategy: keyData.schedulingStrategy || 'weighted',
+      enableLatencyOptimization: keyData.enableLatencyOptimization === 'true'
     }
   }
 
@@ -242,6 +254,14 @@ class ApiKeyService {
         tags = []
       }
 
+      // 🆕 解析多账号绑定配置
+      let boundAccounts = []
+      try {
+        boundAccounts = keyData.boundAccounts ? JSON.parse(keyData.boundAccounts) : []
+      } catch (e) {
+        boundAccounts = []
+      }
+
       return {
         valid: true,
         keyData: {
@@ -273,7 +293,11 @@ class ApiKeyService {
           totalCost,
           weeklyOpusCost: (await redis.getWeeklyOpusCost(keyData.id)) || 0,
           tags,
-          usage
+          usage,
+          // 🆕 多账号绑定配置
+          boundAccounts,
+          schedulingStrategy: keyData.schedulingStrategy || 'weighted',
+          enableLatencyOptimization: keyData.enableLatencyOptimization === 'true'
         }
       }
     } catch (error) {
@@ -515,6 +539,15 @@ class ApiKeyService {
         } catch (e) {
           key.tags = []
         }
+        // 🆕 解析多账号绑定配置
+        try {
+          key.boundAccounts = key.boundAccounts ? JSON.parse(key.boundAccounts) : []
+        } catch (e) {
+          key.boundAccounts = []
+        }
+        // 解析其他新增字段
+        key.schedulingStrategy = key.schedulingStrategy || 'weighted'
+        key.enableLatencyOptimization = key.enableLatencyOptimization === 'true'
         // 不暴露已弃用字段
         if (Object.prototype.hasOwnProperty.call(key, 'ccrAccountId')) {
           delete key.ccrAccountId
@@ -570,19 +603,29 @@ class ApiKeyService {
         'tags',
         'userId', // 新增：用户ID（所有者变更）
         'userUsername', // 新增：用户名（所有者变更）
-        'createdBy' // 新增：创建者（所有者变更）
+        'createdBy', // 新增：创建者（所有者变更）
+        // 🆕 多账号绑定配置
+        'boundAccounts',
+        'schedulingStrategy',
+        'enableLatencyOptimization'
       ]
       const updatedData = { ...keyData }
 
       for (const [field, value] of Object.entries(updates)) {
         if (allowedUpdates.includes(field)) {
-          if (field === 'restrictedModels' || field === 'allowedClients' || field === 'tags') {
+          if (
+            field === 'restrictedModels' ||
+            field === 'allowedClients' ||
+            field === 'tags' ||
+            field === 'boundAccounts'
+          ) {
             // 特殊处理数组字段
             updatedData[field] = JSON.stringify(value || [])
           } else if (
             field === 'enableModelRestriction' ||
             field === 'enableClientRestriction' ||
-            field === 'isActivated'
+            field === 'isActivated' ||
+            field === 'enableLatencyOptimization'
           ) {
             // 布尔值转字符串
             updatedData[field] = String(value)

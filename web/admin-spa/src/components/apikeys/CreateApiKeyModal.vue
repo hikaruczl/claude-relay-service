@@ -707,6 +707,279 @@
             </p>
           </div>
 
+          <!-- 🆕 多账号调度配置 -->
+          <div
+            class="rounded-lg border-2 border-dashed border-purple-300 bg-gradient-to-br from-purple-50 to-indigo-50 p-4 dark:border-purple-700 dark:from-purple-900/20 dark:to-indigo-900/20"
+          >
+            <div class="mb-3 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <input
+                  id="enableMultiAccount"
+                  v-model="form.enableMultiAccount"
+                  class="h-4 w-4 rounded border-gray-300 bg-gray-100 text-purple-600 focus:ring-purple-500"
+                  :disabled="
+                    !!form.claudeAccountId || !!form.geminiAccountId || !!form.openaiAccountId
+                  "
+                  type="checkbox"
+                />
+                <label
+                  class="cursor-pointer text-sm font-semibold text-gray-700 dark:text-gray-300"
+                  for="enableMultiAccount"
+                >
+                  <i class="fas fa-network-wired mr-1 text-purple-600 dark:text-purple-400" />
+                  启用多账号智能调度
+                </label>
+              </div>
+              <span
+                v-if="!!form.claudeAccountId || !!form.geminiAccountId || !!form.openaiAccountId"
+                class="text-xs text-amber-600 dark:text-amber-400"
+              >
+                已绑定专属账号时不可用
+              </span>
+            </div>
+
+            <div v-if="form.enableMultiAccount" class="space-y-4">
+              <!-- 调度策略选择 -->
+              <div>
+                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >调度策略</label
+                >
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label
+                    :class="[
+                      'flex cursor-pointer items-center gap-2 rounded-lg border-2 p-3 transition-all',
+                      form.schedulingStrategy === 'weighted'
+                        ? 'border-purple-500 bg-purple-50 dark:border-purple-600 dark:bg-purple-900/30'
+                        : 'border-gray-300 hover:border-purple-300 dark:border-gray-600 dark:hover:border-purple-700'
+                    ]"
+                  >
+                    <input
+                      v-model="form.schedulingStrategy"
+                      class="text-purple-600"
+                      name="schedulingStrategy"
+                      type="radio"
+                      value="weighted"
+                    />
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        <i class="fas fa-balance-scale mr-1" />
+                        加权轮询
+                      </div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">按权重随机分配请求</div>
+                    </div>
+                  </label>
+                  <label
+                    :class="[
+                      'flex cursor-pointer items-center gap-2 rounded-lg border-2 p-3 transition-all',
+                      form.schedulingStrategy === 'latency'
+                        ? 'border-purple-500 bg-purple-50 dark:border-purple-600 dark:bg-purple-900/30'
+                        : 'border-gray-300 hover:border-purple-300 dark:border-gray-600 dark:hover:border-purple-700'
+                    ]"
+                  >
+                    <input
+                      v-model="form.schedulingStrategy"
+                      class="text-purple-600"
+                      name="schedulingStrategy"
+                      type="radio"
+                      value="latency"
+                    />
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        <i class="fas fa-tachometer-alt mr-1" />
+                        延迟优先
+                      </div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">选择延迟最低的账号</div>
+                    </div>
+                  </label>
+                  <label
+                    :class="[
+                      'flex cursor-pointer items-center gap-2 rounded-lg border-2 p-3 transition-all',
+                      form.schedulingStrategy === 'hybrid'
+                        ? 'border-purple-500 bg-purple-50 dark:border-purple-600 dark:bg-purple-900/30'
+                        : 'border-gray-300 hover:border-purple-300 dark:border-gray-600 dark:hover:border-purple-700'
+                    ]"
+                  >
+                    <input
+                      v-model="form.schedulingStrategy"
+                      class="text-purple-600"
+                      name="schedulingStrategy"
+                      type="radio"
+                      value="hybrid"
+                    />
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        <i class="fas fa-magic mr-1" />
+                        混合策略
+                      </div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">优先级+延迟+权重</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <!-- 延迟优化开关 -->
+              <div class="flex items-center gap-2">
+                <input
+                  id="enableLatencyOptimization"
+                  v-model="form.enableLatencyOptimization"
+                  class="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                  type="checkbox"
+                />
+                <label
+                  class="cursor-pointer text-sm text-gray-700 dark:text-gray-300"
+                  for="enableLatencyOptimization"
+                >
+                  <i class="fas fa-chart-line mr-1 text-purple-600 dark:text-purple-400" />
+                  启用延迟统计和优化（根据账号实际延迟动态调整）
+                </label>
+              </div>
+
+              <!-- 绑定账号列表 -->
+              <div>
+                <div class="mb-2 flex items-center justify-between">
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >绑定账号列表</label
+                  >
+                  <button
+                    class="flex items-center gap-1 rounded bg-purple-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
+                    type="button"
+                    @click="addBoundAccount"
+                  >
+                    <i class="fas fa-plus" />
+                    添加账号
+                  </button>
+                </div>
+
+                <!-- 账号列表 -->
+                <div
+                  v-if="form.boundAccounts.length === 0"
+                  class="rounded-lg border-2 border-dashed border-gray-300 p-6 text-center dark:border-gray-600"
+                >
+                  <i class="fas fa-inbox mb-2 text-3xl text-gray-400 dark:text-gray-500" />
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    暂无绑定账号，点击上方"添加账号"按钮开始配置
+                  </p>
+                </div>
+
+                <div v-else class="space-y-3">
+                  <div
+                    v-for="(account, index) in form.boundAccounts"
+                    :key="index"
+                    class="rounded-lg border border-gray-300 bg-white p-3 dark:border-gray-600 dark:bg-gray-800"
+                  >
+                    <div class="mb-2 flex items-center justify-between">
+                      <span class="text-sm font-semibold text-gray-700 dark:text-gray-300"
+                        >账号 #{{ index + 1 }}</span
+                      >
+                      <div class="flex items-center gap-2">
+                        <label class="flex cursor-pointer items-center gap-1 text-xs">
+                          <input
+                            v-model="account.enabled"
+                            class="rounded border-gray-300 text-green-600"
+                            type="checkbox"
+                          />
+                          <span class="text-gray-600 dark:text-gray-400">启用</span>
+                        </label>
+                        <button
+                          class="text-red-600 hover:text-red-800 dark:text-red-400"
+                          type="button"
+                          @click="removeBoundAccount(index)"
+                        >
+                          <i class="fas fa-trash text-sm" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <!-- 选择账号 -->
+                      <div class="sm:col-span-2">
+                        <label
+                          class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                          >Claude 账号</label
+                        >
+                        <AccountSelector
+                          v-model="account.accountId"
+                          :accounts="localAccounts.claude"
+                          :groups="localAccounts.claudeGroups"
+                          placeholder="请选择Claude账号"
+                          platform="claude"
+                          required
+                        />
+                      </div>
+
+                      <!-- 权重 -->
+                      <div>
+                        <label
+                          class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                        >
+                          权重 (1-100)
+                        </label>
+                        <input
+                          v-model.number="account.weight"
+                          class="form-input w-full text-sm dark:border-gray-600 dark:bg-gray-700"
+                          max="100"
+                          min="1"
+                          placeholder="50"
+                          type="number"
+                        />
+                      </div>
+
+                      <!-- 优先级 -->
+                      <div>
+                        <label
+                          class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                        >
+                          优先级 (1-10)
+                        </label>
+                        <input
+                          v-model.number="account.priority"
+                          class="form-input w-full text-sm dark:border-gray-600 dark:bg-gray-700"
+                          max="10"
+                          min="1"
+                          placeholder="5"
+                          type="number"
+                        />
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          数字越小优先级越高
+                        </p>
+                      </div>
+
+                      <!-- 最大延迟阈值 -->
+                      <div class="sm:col-span-2">
+                        <label
+                          class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                        >
+                          最大延迟阈值 (毫秒, 0=不限制)
+                        </label>
+                        <input
+                          v-model.number="account.maxLatency"
+                          class="form-input w-full text-sm dark:border-gray-600 dark:bg-gray-700"
+                          min="0"
+                          placeholder="3000"
+                          type="number"
+                        />
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          超过此延迟的账号将被过滤（仅在延迟优化启用时生效）
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 说明 -->
+              <div class="rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+                <p class="flex items-start text-xs text-blue-700 dark:text-blue-300">
+                  <i class="fas fa-info-circle mr-2 mt-0.5 flex-shrink-0" />
+                  <span>
+                    多账号调度说明：系统将根据所选策略在绑定的账号中智能选择，实现负载均衡和延迟优化。
+                    启用延迟统计后，系统会自动记录每个账号的响应延迟，并在调度时优先选择延迟较低的账号。
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div>
             <div class="mb-2 flex items-center">
               <input
@@ -941,7 +1214,12 @@ const form = reactive({
   modelInput: '',
   enableClientRestriction: false,
   allowedClients: [],
-  tags: []
+  tags: [],
+  // 🆕 多账号调度配置
+  enableMultiAccount: false,
+  boundAccounts: [],
+  schedulingStrategy: 'weighted',
+  enableLatencyOptimization: false
 })
 
 // 加载支持的客户端和已存在的标签
@@ -1233,6 +1511,22 @@ const updateActivationValue = () => {
   }
 }
 
+// 🆕 添加绑定账号
+const addBoundAccount = () => {
+  form.boundAccounts.push({
+    accountId: '',
+    weight: 50,
+    priority: 5,
+    enabled: true,
+    maxLatency: 3000
+  })
+}
+
+// 🆕 删除绑定账号
+const removeBoundAccount = (index) => {
+  form.boundAccounts.splice(index, 1)
+}
+
 // 创建 API Key
 const createApiKey = async () => {
   // 验证表单
@@ -1345,6 +1639,13 @@ const createApiKey = async () => {
     // Bedrock账户绑定
     if (form.bedrockAccountId) {
       baseData.bedrockAccountId = form.bedrockAccountId
+    }
+
+    // 🆕 多账号调度配置
+    if (form.enableMultiAccount && form.boundAccounts.length > 0) {
+      baseData.boundAccounts = form.boundAccounts
+      baseData.schedulingStrategy = form.schedulingStrategy
+      baseData.enableLatencyOptimization = form.enableLatencyOptimization
     }
 
     if (form.createType === 'single') {

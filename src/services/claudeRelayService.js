@@ -53,6 +53,7 @@ class ClaudeRelayService {
     options = {}
   ) {
     let upstreamRequest = null
+    const requestStartTime = Date.now() // 🆕 记录请求开始时间
 
     try {
       // 调试日志：查看API Key数据
@@ -421,6 +422,11 @@ class ClaudeRelayService {
         )
       }
 
+      // 🆕 记录请求延迟
+      const requestLatency = Date.now() - requestStartTime
+      await this._recordAccountLatency(accountId, requestLatency)
+      logger.info(`⏱️ Request latency for account ${accountId}: ${requestLatency}ms`)
+
       // 在响应中添加accountId，以便调用方记录账户级别统计
       response.accountId = accountId
       return response
@@ -666,6 +672,45 @@ class ClaudeRelayService {
     } catch (error) {
       logger.warn('⚠️ Failed to create proxy agent:', error)
       return null
+    }
+  }
+
+  // 📊 记录账号请求延迟
+  async _recordAccountLatency(accountId, latency) {
+    try {
+      const MAX_RECENT_SAMPLES = 100 // 保留最近100次请求的延迟数据
+
+      // Redis keys
+      const recentKey = `account_latency:${accountId}:recent`
+      const avgKey = `account_latency:${accountId}:avg`
+      const p95Key = `account_latency:${accountId}:p95`
+
+      // 添加到最近延迟列表（使用 Redis List）
+      await redis.client.lpush(recentKey, latency)
+      await redis.client.ltrim(recentKey, 0, MAX_RECENT_SAMPLES - 1) // 保留最近N个
+
+      // 获取最近的所有延迟数据
+      const recentLatencies = await redis.client.lrange(recentKey, 0, MAX_RECENT_SAMPLES - 1)
+      const latencyNumbers = recentLatencies.map((l) => parseFloat(l))
+
+      // 计算平均延迟
+      const avgLatency = latencyNumbers.reduce((sum, l) => sum + l, 0) / latencyNumbers.length
+
+      // 计算 P95 延迟
+      const sortedLatencies = [...latencyNumbers].sort((a, b) => a - b)
+      const p95Index = Math.floor(sortedLatencies.length * 0.95)
+      const p95Latency = sortedLatencies[p95Index] || avgLatency
+
+      // 保存统计数据（设置1小时过期）
+      await redis.client.setex(avgKey, 3600, avgLatency.toFixed(2))
+      await redis.client.setex(p95Key, 3600, p95Latency.toFixed(2))
+
+      logger.debug(
+        `📊 Account ${accountId} latency stats - Avg: ${avgLatency.toFixed(2)}ms, P95: ${p95Latency.toFixed(2)}ms`
+      )
+    } catch (error) {
+      logger.error(`❌ Failed to record account latency for ${accountId}:`, error)
+      // 不抛出错误，避免影响主流程
     }
   }
 

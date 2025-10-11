@@ -863,9 +863,245 @@ class ClaudeAccountService {
     }
   }
 
-  // 🎯 基于API Key选择账户（支持专属绑定、共享池和模型过滤）
+  // 🎯 从绑定的多个账号中选择一个（支持加权、延迟优先、混合策略）
+  async selectFromBoundAccounts(apiKeyData, sessionHash = null) {
+    try {
+      const { boundAccounts, schedulingStrategy, enableLatencyOptimization } = apiKeyData
+
+      // 获取所有账号的详细信息
+      const accountDetailsPromises = boundAccounts.map(async (boundConfig) => {
+        const account = await redis.getClaudeAccount(boundConfig.accountId)
+        return { boundConfig, account }
+      })
+      const accountDetails = await Promise.all(accountDetailsPromises)
+
+      // 过滤出可用的账号
+      const availableAccounts = accountDetails.filter(({ boundConfig, account }) => {
+        // 检查账号是否存在且启用
+        if (
+          !account ||
+          !boundConfig.enabled ||
+          account.isActive !== 'true' ||
+          account.status === 'error' ||
+          account.schedulable === 'false'
+        ) {
+          return false
+        }
+        return true
+      })
+
+      if (availableAccounts.length === 0) {
+        logger.warn(`⚠️ No available accounts in bound accounts list`)
+        return null
+      }
+
+      // 如果只有一个可用账号，直接返回
+      if (availableAccounts.length === 1) {
+        logger.info(`🎯 Only one available account: ${availableAccounts[0].account.name}`)
+        return availableAccounts[0].account.id
+      }
+
+      // 如果有 sessionHash 且启用了 sticky session，检查是否有映射
+      if (sessionHash) {
+        const mappedAccountId = await redis.getSessionAccountMapping(sessionHash)
+        if (mappedAccountId) {
+          // 验证映射的账户是否在绑定列表中且可用
+          const mappedAccount = availableAccounts.find(
+            ({ account }) => account.id === mappedAccountId
+          )
+          if (mappedAccount) {
+            // 检查是否被限流
+            const isRateLimited = await this.isAccountRateLimited(mappedAccountId)
+            if (!isRateLimited) {
+              logger.info(`🔗 Using sticky session account: ${mappedAccount.account.name}`)
+              // 续期 TTL
+              await redis.extendSessionAccountMappingTTL(sessionHash)
+              return mappedAccountId
+            } else {
+              logger.warn(`⚠️ Sticky session account ${mappedAccountId} is rate limited`)
+              await redis.deleteSessionAccountMapping(sessionHash)
+            }
+          }
+        }
+      }
+
+      // 根据调度策略选择账号
+      let selectedAccount = null
+
+      switch (schedulingStrategy) {
+        case 'weighted':
+          selectedAccount = await this._selectByWeight(availableAccounts)
+          break
+        case 'latency':
+          selectedAccount = await this._selectByLatency(
+            availableAccounts,
+            enableLatencyOptimization
+          )
+          break
+        case 'hybrid':
+          selectedAccount = await this._selectByHybrid(availableAccounts, enableLatencyOptimization)
+          break
+        default:
+          // 默认使用加权策略
+          selectedAccount = await this._selectByWeight(availableAccounts)
+      }
+
+      if (!selectedAccount) {
+        logger.error(`❌ Failed to select account using strategy: ${schedulingStrategy}`)
+        return null
+      }
+
+      // 如果有 sessionHash，建立映射
+      if (sessionHash) {
+        await redis.setSessionAccountMapping(sessionHash, selectedAccount.account.id)
+      }
+
+      logger.info(
+        `🎯 Selected account ${selectedAccount.account.name} using strategy: ${schedulingStrategy}`
+      )
+      return selectedAccount.account.id
+    } catch (error) {
+      logger.error(`❌ Error selecting from bound accounts:`, error)
+      return null
+    }
+  }
+
+  // 🎲 按权重选择（加权随机）
+  async _selectByWeight(availableAccounts) {
+    // 计算总权重
+    const totalWeight = availableAccounts.reduce(
+      (sum, { boundConfig }) => sum + (boundConfig.weight || 50),
+      0
+    )
+
+    // 生成随机数
+    let random = Math.random() * totalWeight
+    let selected = null
+
+    // 轮询选择
+    for (const account of availableAccounts) {
+      random -= account.boundConfig.weight || 50
+      if (random <= 0) {
+        selected = account
+        break
+      }
+    }
+
+    return selected || availableAccounts[0]
+  }
+
+  // ⚡ 按延迟选择（选择平均延迟最低的账号）
+  async _selectByLatency(availableAccounts, enableOptimization) {
+    if (!enableOptimization) {
+      // 如果未启用延迟优化，回退到加权选择
+      return this._selectByWeight(availableAccounts)
+    }
+
+    // 获取每个账号的延迟统计
+    const accountsWithLatency = await Promise.all(
+      availableAccounts.map(async (accountDetail) => {
+        const latency = await this._getAccountAvgLatency(accountDetail.account.id)
+        return { ...accountDetail, latency }
+      })
+    )
+
+    // 过滤掉超过最大延迟阈值的账号
+    let candidates = accountsWithLatency.filter(({ boundConfig, latency }) => {
+      if (boundConfig.maxLatency && boundConfig.maxLatency > 0) {
+        return latency <= boundConfig.maxLatency
+      }
+      return true
+    })
+
+    // 如果所有账号都超过阈值，则使用所有账号
+    if (candidates.length === 0) {
+      candidates = accountsWithLatency
+    }
+
+    // 按延迟排序，选择最低的
+    candidates.sort((a, b) => a.latency - b.latency)
+    return candidates[0]
+  }
+
+  // 🔀 混合策略（优先级 → 延迟过滤 → 加权选择）
+  async _selectByHybrid(availableAccounts, enableOptimization) {
+    // Step 1: 按优先级排序（数字越小优先级越高）
+    const sortedByPriority = [...availableAccounts].sort((a, b) => {
+      const priorityA = a.boundConfig.priority || 5
+      const priorityB = b.boundConfig.priority || 5
+      return priorityA - priorityB
+    })
+
+    // 找到最高优先级
+    const highestPriority = sortedByPriority[0].boundConfig.priority || 5
+
+    // 过滤出最高优先级的账号
+    const highPriorityAccounts = sortedByPriority.filter(
+      ({ boundConfig }) => (boundConfig.priority || 5) === highestPriority
+    )
+
+    // Step 2: 如果启用延迟优化，进行延迟过滤
+    if (enableOptimization) {
+      const accountsWithLatency = await Promise.all(
+        highPriorityAccounts.map(async (accountDetail) => {
+          const latency = await this._getAccountAvgLatency(accountDetail.account.id)
+          return { ...accountDetail, latency }
+        })
+      )
+
+      // 过滤掉超过最大延迟阈值的账号
+      let candidates = accountsWithLatency.filter(({ boundConfig, latency }) => {
+        if (boundConfig.maxLatency && boundConfig.maxLatency > 0) {
+          return latency <= boundConfig.maxLatency
+        }
+        return true
+      })
+
+      // 如果所有账号都超过阈值，则使用所有高优先级账号
+      if (candidates.length === 0) {
+        candidates = accountsWithLatency
+      }
+
+      // Step 3: 在候选账号中使用加权选择
+      return this._selectByWeight(candidates)
+    }
+
+    // 如果未启用延迟优化，直接在高优先级账号中加权选择
+    return this._selectByWeight(highPriorityAccounts)
+  }
+
+  // 📊 获取账号的平均延迟（毫秒）
+  async _getAccountAvgLatency(accountId) {
+    try {
+      const latencyKey = `account_latency:${accountId}:avg`
+      const avgLatency = await redis.get(latencyKey)
+      // 如果没有统计数据，返回默认值 1000ms
+      return avgLatency ? parseFloat(avgLatency) : 1000
+    } catch (error) {
+      logger.error(`❌ Failed to get account latency for ${accountId}:`, error)
+      return 1000 // 返回默认值
+    }
+  }
+
+  // 🎯 基于API Key选择账户（支持专属绑定、多账号调度、共享池和模型过滤）
   async selectAccountForApiKey(apiKeyData, sessionHash = null, modelName = null) {
     try {
+      // 🆕 多账号绑定调度：如果配置了 boundAccounts，使用多账号调度算法
+      if (apiKeyData.boundAccounts && apiKeyData.boundAccounts.length > 0) {
+        logger.info(
+          `🎯 Using multi-account scheduling for API key ${apiKeyData.name} with ${apiKeyData.boundAccounts.length} bound accounts`
+        )
+        const selectedAccountId = await this.selectFromBoundAccounts(apiKeyData, sessionHash)
+        if (selectedAccountId) {
+          return selectedAccountId
+        } else {
+          logger.warn(
+            `⚠️ All bound accounts unavailable for API key ${apiKeyData.name}, falling back to single account or shared pool`
+          )
+          // 继续执行原有逻辑（单账号绑定或共享池）
+        }
+      }
+
       // 如果API Key绑定了专属账户，优先使用
       if (apiKeyData.claudeAccountId) {
         const boundAccount = await redis.getClaudeAccount(apiKeyData.claudeAccountId)

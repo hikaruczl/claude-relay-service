@@ -50,6 +50,46 @@ function getWeekStringInTimezone(date = new Date()) {
   return `${year}-W${String(weekNumber).padStart(2, '0')}`
 }
 
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') {
+    return false
+  }
+
+  return Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null
+}
+
+function normalizeHashValue(value) {
+  if (value === null || value === undefined) {
+    return ''
+  }
+
+  if (Buffer.isBuffer(value)) {
+    return value
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  if (Array.isArray(value)) {
+    return JSON.stringify(value)
+  }
+
+  if (isPlainObject(value)) {
+    return JSON.stringify(value)
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
+  }
+
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return value.toString()
+  }
+
+  return value
+}
+
 class RedisClient {
   constructor() {
     this.client = null
@@ -68,6 +108,54 @@ class RedisClient {
         lazyConnect: config.redis.lazyConnect,
         tls: config.redis.enableTLS ? {} : false
       })
+
+      const originalHset = this.client.hset.bind(this.client)
+      this.client.hset = async (...args) => {
+        if (args.length === 2 && isPlainObject(args[1])) {
+          const [key, data] = args
+          let addedCount = 0
+
+          for (const [field, value] of Object.entries(data)) {
+            if (typeof field !== 'string' || field.length === 0) {
+              continue
+            }
+
+            const normalizedValue = normalizeHashValue(value)
+            const result = await originalHset(key, field, normalizedValue)
+
+            if (typeof result === 'number') {
+              addedCount += result
+            }
+          }
+
+          return addedCount
+        }
+
+        if (args.length === 2 && Array.isArray(args[1])) {
+          const [key, entries] = args
+
+          if (entries.length % 2 !== 0) {
+            throw new Error('Invalid HSET entries: uneven field/value pairs')
+          }
+
+          let addedCount = 0
+
+          for (let index = 0; index < entries.length; index += 2) {
+            const field = entries[index]
+            const value = entries[index + 1]
+            const normalizedValue = normalizeHashValue(value)
+            const result = await originalHset(key, field, normalizedValue)
+
+            if (typeof result === 'number') {
+              addedCount += result
+            }
+          }
+
+          return addedCount
+        }
+
+        return originalHset(...args)
+      }
 
       this.client.on('connect', () => {
         this.isConnected = true
@@ -1132,9 +1220,15 @@ class RedisClient {
     // 10分钟过期
     const key = `oauth:${sessionId}`
 
+    // 兼容字段别名，确保 codeVerifier 始终被持久化
+    const normalizedSessionData = { ...sessionData }
+    if (normalizedSessionData.codeVerifier && !normalizedSessionData.code_verifier) {
+      normalizedSessionData.code_verifier = normalizedSessionData.codeVerifier
+    }
+
     // 序列化复杂对象，特别是 proxy 配置
     const serializedData = {}
-    for (const [dataKey, value] of Object.entries(sessionData)) {
+    for (const [dataKey, value] of Object.entries(normalizedSessionData)) {
       if (typeof value === 'object' && value !== null) {
         serializedData[dataKey] = JSON.stringify(value)
       } else {
@@ -1150,6 +1244,10 @@ class RedisClient {
     const key = `oauth:${sessionId}`
     const data = await this.client.hgetall(key)
 
+    if (!data || Object.keys(data).length === 0) {
+      return data
+    }
+
     // 反序列化 proxy 字段
     if (data.proxy) {
       try {
@@ -1158,6 +1256,11 @@ class RedisClient {
         // 如果解析失败，设置为 null
         data.proxy = null
       }
+    }
+
+    // 兼容 codeVerifier 字段别名
+    if (!data.codeVerifier && data.code_verifier) {
+      data.codeVerifier = data.code_verifier
     }
 
     return data

@@ -26,6 +26,9 @@ const ProxyHelper = require('../utils/proxyHelper')
 
 const router = express.Router()
 
+// 兼容旧版控制台入口，重定向到新版路径
+router.get('/', (req, res) => res.redirect(301, '/admin-next/api-stats'))
+
 // 👥 用户管理
 
 // 获取所有用户列表（用于API Key分配）
@@ -3718,26 +3721,48 @@ router.post('/gemini-accounts/exchange-code', authenticateAdmin, async (req, res
       return res.status(400).json({ error: 'Authorization code is required' })
     }
 
+    if (!sessionId) {
+      return res.status(400).json({
+        error: 'Session ID is required',
+        message: '缺少授权会话标识，请重新生成授权链接后再试'
+      })
+    }
+
     let redirectUri = 'https://codeassist.google.com/authcode'
     let codeVerifier = null
     let proxyConfig = null
 
-    // 如果提供了 sessionId，从 OAuth 会话中获取信息
-    if (sessionId) {
-      const sessionData = await redis.getOAuthSession(sessionId)
-      if (sessionData) {
-        const {
-          redirectUri: sessionRedirectUri,
-          codeVerifier: sessionCodeVerifier,
-          proxy
-        } = sessionData
-        redirectUri = sessionRedirectUri || redirectUri
-        codeVerifier = sessionCodeVerifier
-        proxyConfig = proxy // 获取代理配置
-        logger.info(
-          `Using session redirect_uri: ${redirectUri}, has codeVerifier: ${!!codeVerifier}, has proxy from session: ${!!proxyConfig}`
+    const sessionData = await redis.getOAuthSession(sessionId)
+
+    if (sessionData && Object.keys(sessionData).length > 0) {
+      const {
+        redirectUri: sessionRedirectUri,
+        codeVerifier: sessionCodeVerifier,
+        proxy
+      } = sessionData
+      redirectUri = sessionRedirectUri || redirectUri
+      codeVerifier = sessionCodeVerifier
+      proxyConfig = proxy // 获取代理配置
+      const hasCodeVerifier = typeof codeVerifier === 'string' && codeVerifier.length > 0
+      logger.info(
+        `Using session redirect_uri: ${redirectUri}, has codeVerifier: ${hasCodeVerifier}, has proxy from session: ${!!proxyConfig}`
+      )
+
+      if (!hasCodeVerifier) {
+        logger.warn(
+          `Gemini OAuth session ${sessionId} missing PKCE verifier. Request cannot proceed.`
         )
+        return res.status(400).json({
+          error: 'Invalid or expired session',
+          message: '授权会话已过期，请重新生成授权链接并再次完成授权'
+        })
       }
+    } else {
+      logger.warn(`Gemini OAuth session ${sessionId} not found or empty when exchanging code.`)
+      return res.status(400).json({
+        error: 'Invalid or expired session',
+        message: '授权会话不存在或已过期，请重新生成授权链接'
+      })
     }
 
     // 如果请求体中直接提供了代理配置，优先使用它

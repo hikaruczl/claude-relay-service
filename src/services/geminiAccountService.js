@@ -21,6 +21,27 @@ const OAUTH_CLIENT_ID = '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.goog
 const OAUTH_CLIENT_SECRET = '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'
 const OAUTH_SCOPES = ['https://www.googleapis.com/auth/cloud-platform']
 
+function normalizeProjectId(projectId) {
+  if (!projectId || typeof projectId !== 'string') {
+    return ''
+  }
+
+  const cleaned = projectId.trim()
+  if (!cleaned) {
+    return ''
+  }
+
+  const normalized = cleaned.toLowerCase()
+
+  // Google Cloud 项目 ID 必须匹配 [a-z][a-z0-9-]{4,28}[a-z0-9]
+  const projectIdPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/
+  if (!projectIdPattern.test(normalized)) {
+    logger.warn(`⚠️ Invalid Google Cloud projectId format detected: ${projectId}`)
+  }
+
+  return normalized
+}
+
 // 加密相关常量
 const ALGORITHM = 'aes-256-cbc'
 const ENCRYPTION_SALT = 'gemini-account-salt'
@@ -392,10 +413,10 @@ async function createAccount(accountData) {
     proxy: accountData.proxy ? JSON.stringify(accountData.proxy) : '',
 
     // 项目 ID（Google Cloud/Workspace 账号需要）
-    projectId: accountData.projectId || '',
+    projectId: normalizeProjectId(accountData.projectId),
 
     // 临时项目 ID（从 loadCodeAssist 接口自动获取）
-    tempProjectId: accountData.tempProjectId || '',
+    tempProjectId: normalizeProjectId(accountData.tempProjectId),
 
     // 支持的模型列表（可选）
     supportedModels: accountData.supportedModels || [], // 空数组表示支持所有模型
@@ -461,6 +482,9 @@ async function getAccount(accountId) {
     }
   }
 
+  accountData.projectId = normalizeProjectId(accountData.projectId)
+  accountData.tempProjectId = normalizeProjectId(accountData.tempProjectId)
+
   // 转换 schedulable 字符串为布尔值（与 claudeConsoleAccountService 保持一致）
   accountData.schedulable = accountData.schedulable !== 'false' // 默认为true，只有明确设置为'false'才为false
 
@@ -485,6 +509,14 @@ async function updateAccount(accountId, updates) {
   // 处理代理设置
   if (updates.proxy !== undefined) {
     updates.proxy = updates.proxy ? JSON.stringify(updates.proxy) : ''
+  }
+
+  if (updates.projectId !== undefined) {
+    updates.projectId = normalizeProjectId(updates.projectId)
+  }
+
+  if (updates.tempProjectId !== undefined) {
+    updates.tempProjectId = normalizeProjectId(updates.tempProjectId)
   }
 
   // 处理 schedulable 字段，确保正确转换为字符串存储
@@ -639,6 +671,9 @@ async function getAllAccounts() {
           accountData.proxy = null
         }
       }
+
+      accountData.projectId = normalizeProjectId(accountData.projectId)
+      accountData.tempProjectId = normalizeProjectId(accountData.tempProjectId)
 
       // 转换 schedulable 字符串为布尔值（与 getAccount 保持一致）
       accountData.schedulable = accountData.schedulable !== 'false' // 默认为true，只有明确设置为'false'才为false
@@ -1290,6 +1325,8 @@ async function generateContent(
 
   const { token } = await client.getAccessToken()
 
+  const normalizedProjectId = normalizeProjectId(projectId)
+
   // 按照 gemini-cli 的转换格式构造请求
   const request = {
     model: requestData.model,
@@ -1305,14 +1342,14 @@ async function generateContent(
   }
 
   // 只有当projectId存在时才添加project字段
-  if (projectId) {
-    request.project = projectId
+  if (normalizedProjectId) {
+    request.project = normalizedProjectId
   }
 
   logger.info('🤖 generateContent API调用开始', {
     model: requestData.model,
     userPromptId,
-    projectId,
+    projectId: normalizedProjectId,
     sessionId
   })
 
@@ -1365,6 +1402,7 @@ async function generateContentStream(
   const CODE_ASSIST_API_VERSION = 'v1internal'
 
   const { token } = await client.getAccessToken()
+  const normalizedProjectId = normalizeProjectId(projectId)
 
   // 按照 gemini-cli 的转换格式构造请求
   const request = {
@@ -1381,14 +1419,14 @@ async function generateContentStream(
   }
 
   // 只有当projectId存在时才添加project字段
-  if (projectId) {
-    request.project = projectId
+  if (normalizedProjectId) {
+    request.project = normalizedProjectId
   }
 
   logger.info('🌊 streamGenerateContent API调用开始', {
     model: requestData.model,
     userPromptId,
-    projectId,
+    projectId: normalizedProjectId,
     sessionId
   })
 
@@ -1481,6 +1519,7 @@ module.exports = {
   generateContent,
   generateContentStream,
   updateTempProjectId,
+  normalizeProjectId,
   OAUTH_CLIENT_ID,
   OAUTH_SCOPES
 }

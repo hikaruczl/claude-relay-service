@@ -648,10 +648,16 @@ async function handleGenerateContent(req, res) {
     const { accessToken, refreshToken } = account
 
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
+    const accountProjectId = account.projectId
+    const { tempProjectId } = account
+    const requestProjectId = geminiAccountService.normalizeProjectId(project)
+
     logger.info(`GenerateContent request (${version})`, {
       model,
       userPromptId: user_prompt_id,
-      projectId: project || account.projectId,
+      accountProjectId,
+      tempProjectId,
+      requestProjectId,
       apiKeyId: req.apiKey?.id || 'unknown'
     })
 
@@ -667,17 +673,20 @@ async function handleGenerateContent(req, res) {
 
     const client = await geminiAccountService.getOauthClient(accessToken, refreshToken, proxyConfig)
 
-    // 智能处理项目ID：
-    // 1. 如果账户配置了项目ID -> 使用账户的项目ID（覆盖请求中的）
-    // 2. 如果账户没有项目ID -> 使用请求中的项目ID（如果有的话）
-    // 3. 都没有 -> 传null
-    const effectiveProjectId = account.projectId || project || null
+    const effectiveProjectId = requestProjectId || accountProjectId || tempProjectId || null
 
     logger.info('📋 项目ID处理逻辑', {
-      accountProjectId: account.projectId,
-      requestProjectId: project,
+      accountProjectId,
+      tempProjectId,
+      requestProjectId,
       effectiveProjectId,
-      decision: account.projectId ? '使用账户配置' : project ? '使用请求参数' : '不使用项目ID'
+      decision: requestProjectId
+        ? '使用请求参数'
+        : accountProjectId
+          ? '使用账户配置'
+          : tempProjectId
+            ? '使用临时项目ID'
+            : '不使用项目ID'
     })
 
     const response = await geminiAccountService.generateContent(
@@ -802,10 +811,16 @@ async function handleStreamGenerateContent(req, res) {
     const { accessToken, refreshToken } = account
 
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
+    const accountProjectId = account.projectId
+    const { tempProjectId } = account
+    const requestProjectId = geminiAccountService.normalizeProjectId(project)
+
     logger.info(`StreamGenerateContent request (${version})`, {
       model,
       userPromptId: user_prompt_id,
-      projectId: project || account.projectId,
+      accountProjectId,
+      tempProjectId,
+      requestProjectId,
       apiKeyId: req.apiKey?.id || 'unknown'
     })
 
@@ -832,17 +847,20 @@ async function handleStreamGenerateContent(req, res) {
 
     const client = await geminiAccountService.getOauthClient(accessToken, refreshToken, proxyConfig)
 
-    // 智能处理项目ID：
-    // 1. 如果账户配置了项目ID -> 使用账户的项目ID（覆盖请求中的）
-    // 2. 如果账户没有项目ID -> 使用请求中的项目ID（如果有的话）
-    // 3. 都没有 -> 传null
-    const effectiveProjectId = account.projectId || project || null
+    const effectiveProjectId = requestProjectId || accountProjectId || tempProjectId || null
 
     logger.info('📋 流式请求项目ID处理逻辑', {
-      accountProjectId: account.projectId,
-      requestProjectId: project,
+      accountProjectId,
+      tempProjectId,
+      requestProjectId,
       effectiveProjectId,
-      decision: account.projectId ? '使用账户配置' : project ? '使用请求参数' : '不使用项目ID'
+      decision: requestProjectId
+        ? '使用请求参数'
+        : accountProjectId
+          ? '使用账户配置'
+          : tempProjectId
+            ? '使用临时项目ID'
+            : '不使用项目ID'
     })
 
     const streamResponse = await geminiAccountService.generateContentStream(
