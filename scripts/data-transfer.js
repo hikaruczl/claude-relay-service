@@ -29,6 +29,9 @@ args.slice(1).forEach((arg) => {
   params[key.replace('--', '')] = value || true
 })
 
+// 检测非交互模式（Docker/CI环境）
+const isNonInteractive = !process.stdin.isTTY || params['non-interactive'] === true
+
 // 创建 readline 接口
 const rl = readline.createInterface({
   input: process.stdin,
@@ -36,6 +39,12 @@ const rl = readline.createInterface({
 })
 
 async function askConfirmation(question) {
+  // 非交互模式下自动确认（除非是覆盖操作）
+  if (isNonInteractive) {
+    console.log(`[非交互模式] ${question} -> 自动确认`)
+    return true
+  }
+
   return new Promise((resolve) => {
     rl.question(`${question} (yes/no): `, (answer) => {
       resolve(answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y')
