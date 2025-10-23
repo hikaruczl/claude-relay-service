@@ -333,14 +333,13 @@ async function exportData() {
 
     // 导出 Claude 账户
     if (types.includes('all') || types.includes('accounts')) {
-      logger.info('📤 Exporting Claude accounts...')
-      // 注意：Claude 账户使用 claude:account: 前缀，不是 claude_account:
-      const keys = await redis.client.keys('claude:account:*')
-      logger.info(`Found ${keys.length} Claude account keys in Redis`)
-      const accounts = []
+      // 导出 Claude OAuth 账户
+      logger.info('📤 Exporting Claude OAuth accounts...')
+      const oauthKeys = await redis.client.keys('claude:account:*')
+      logger.info(`Found ${oauthKeys.length} Claude OAuth account keys in Redis`)
+      const oauthAccounts = []
 
-      for (const key of keys) {
-        // 使用 hgetall 而不是 get，因为数据存储在哈希表中
+      for (const key of oauthKeys) {
         const data = await redis.client.hgetall(key)
 
         if (data && Object.keys(data).length > 0) {
@@ -352,12 +351,29 @@ async function exportData() {
               // 保持原样
             }
           }
-          accounts.push(shouldSanitize ? sanitizeData(data, 'claude_account') : data)
+          oauthAccounts.push(shouldSanitize ? sanitizeData(data, 'claude_account') : data)
         }
       }
 
-      exportDataObj.data.claudeAccounts = accounts
-      logger.success(`✅ Exported ${accounts.length} Claude accounts`)
+      exportDataObj.data.claudeAccounts = oauthAccounts
+      logger.success(`✅ Exported ${oauthAccounts.length} Claude OAuth accounts`)
+
+      // 导出 Claude Console 账户
+      logger.info('📤 Exporting Claude Console accounts...')
+      const consoleKeys = await redis.client.keys('claude_console_account:*')
+      logger.info(`Found ${consoleKeys.length} Claude Console account keys in Redis`)
+      const consoleAccounts = []
+
+      for (const key of consoleKeys) {
+        const data = await redis.client.hgetall(key)
+
+        if (data && Object.keys(data).length > 0) {
+          consoleAccounts.push(shouldSanitize ? sanitizeData(data, 'claude_account') : data)
+        }
+      }
+
+      exportDataObj.data.claudeConsoleAccounts = consoleAccounts
+      logger.success(`✅ Exported ${consoleAccounts.length} Claude Console accounts`)
 
       // 导出 Gemini 账户
       logger.info('📤 Exporting Gemini accounts...')
@@ -376,6 +392,23 @@ async function exportData() {
 
       exportDataObj.data.geminiAccounts = geminiAccounts
       logger.success(`✅ Exported ${geminiAccounts.length} Gemini accounts`)
+
+      // 导出 OpenAI Responses 账户
+      logger.info('📤 Exporting OpenAI Responses accounts...')
+      const openaiKeys = await redis.client.keys('openai_responses_account:*')
+      logger.info(`Found ${openaiKeys.length} OpenAI Responses account keys in Redis`)
+      const openaiAccounts = []
+
+      for (const key of openaiKeys) {
+        const data = await redis.client.hgetall(key)
+
+        if (data && Object.keys(data).length > 0) {
+          openaiAccounts.push(shouldSanitize ? sanitizeData(data, 'openai_account') : data)
+        }
+      }
+
+      exportDataObj.data.openaiResponsesAccounts = openaiAccounts
+      logger.success(`✅ Exported ${openaiAccounts.length} OpenAI Responses accounts`)
     }
 
     // 导出管理员
@@ -423,10 +456,16 @@ async function exportData() {
       console.log(`API Keys: ${exportDataObj.data.apiKeys.length}`)
     }
     if (exportDataObj.data.claudeAccounts) {
-      console.log(`Claude Accounts: ${exportDataObj.data.claudeAccounts.length}`)
+      console.log(`Claude OAuth Accounts: ${exportDataObj.data.claudeAccounts.length}`)
+    }
+    if (exportDataObj.data.claudeConsoleAccounts) {
+      console.log(`Claude Console Accounts: ${exportDataObj.data.claudeConsoleAccounts.length}`)
     }
     if (exportDataObj.data.geminiAccounts) {
       console.log(`Gemini Accounts: ${exportDataObj.data.geminiAccounts.length}`)
+    }
+    if (exportDataObj.data.openaiResponsesAccounts) {
+      console.log(`OpenAI Responses Accounts: ${exportDataObj.data.openaiResponsesAccounts.length}`)
     }
     if (exportDataObj.data.admins) {
       console.log(`Admins: ${exportDataObj.data.admins.length}`)
@@ -493,10 +532,20 @@ async function importData() {
       console.log(`API Keys to import: ${importDataObj.data.apiKeys.length}`)
     }
     if (importDataObj.data.claudeAccounts) {
-      console.log(`Claude Accounts to import: ${importDataObj.data.claudeAccounts.length}`)
+      console.log(`Claude OAuth Accounts to import: ${importDataObj.data.claudeAccounts.length}`)
+    }
+    if (importDataObj.data.claudeConsoleAccounts) {
+      console.log(
+        `Claude Console Accounts to import: ${importDataObj.data.claudeConsoleAccounts.length}`
+      )
     }
     if (importDataObj.data.geminiAccounts) {
       console.log(`Gemini Accounts to import: ${importDataObj.data.geminiAccounts.length}`)
+    }
+    if (importDataObj.data.openaiResponsesAccounts) {
+      console.log(
+        `OpenAI Responses Accounts to import: ${importDataObj.data.openaiResponsesAccounts.length}`
+      )
     }
     if (importDataObj.data.admins) {
       console.log(`Admins to import: ${importDataObj.data.admins.length}`)
@@ -564,21 +613,23 @@ async function importData() {
       }
     }
 
-    // 导入 Claude 账户
+    // 导入 Claude OAuth 账户
     if (importDataObj.data.claudeAccounts) {
-      logger.info('\n📥 Importing Claude accounts...')
+      logger.info('\n📥 Importing Claude OAuth accounts...')
       for (const account of importDataObj.data.claudeAccounts) {
         try {
-          const exists = await redis.client.exists(`claude_account:${account.id}`)
+          const exists = await redis.client.exists(`claude:account:${account.id}`)
 
           if (exists && !forceOverwrite) {
             if (skipConflicts) {
-              logger.warn(`⏭️  Skipped existing Claude account: ${account.name} (${account.id})`)
+              logger.warn(
+                `⏭️  Skipped existing Claude OAuth account: ${account.name} (${account.id})`
+              )
               stats.skipped++
               continue
             } else {
               const overwrite = await askConfirmation(
-                `Claude account "${account.name}" (${account.id}) exists. Overwrite?`
+                `Claude OAuth account "${account.name}" (${account.id}) exists. Overwrite?`
               )
               if (!overwrite) {
                 stats.skipped++
@@ -592,16 +643,56 @@ async function importData() {
           for (const [field, value] of Object.entries(account)) {
             // 如果是对象，需要序列化
             if (field === 'claudeAiOauth' && typeof value === 'object') {
-              pipeline.hset(`claude_account:${account.id}`, field, JSON.stringify(value))
+              pipeline.hset(`claude:account:${account.id}`, field, JSON.stringify(value))
             } else {
-              pipeline.hset(`claude_account:${account.id}`, field, value)
+              pipeline.hset(`claude:account:${account.id}`, field, value)
             }
           }
           await pipeline.exec()
-          logger.success(`✅ Imported Claude account: ${account.name} (${account.id})`)
+          logger.success(`✅ Imported Claude OAuth account: ${account.name} (${account.id})`)
           stats.imported++
         } catch (error) {
-          logger.error(`❌ Failed to import Claude account ${account.id}:`, error.message)
+          logger.error(`❌ Failed to import Claude OAuth account ${account.id}:`, error.message)
+          stats.errors++
+        }
+      }
+    }
+
+    // 导入 Claude Console 账户
+    if (importDataObj.data.claudeConsoleAccounts) {
+      logger.info('\n📥 Importing Claude Console accounts...')
+      for (const account of importDataObj.data.claudeConsoleAccounts) {
+        try {
+          const exists = await redis.client.exists(`claude_console_account:${account.id}`)
+
+          if (exists && !forceOverwrite) {
+            if (skipConflicts) {
+              logger.warn(
+                `⏭️  Skipped existing Claude Console account: ${account.name} (${account.id})`
+              )
+              stats.skipped++
+              continue
+            } else {
+              const overwrite = await askConfirmation(
+                `Claude Console account "${account.name}" (${account.id}) exists. Overwrite?`
+              )
+              if (!overwrite) {
+                stats.skipped++
+                continue
+              }
+            }
+          }
+
+          // 使用 hset 存储到哈希表
+          const pipeline = redis.client.pipeline()
+          for (const [field, value] of Object.entries(account)) {
+            pipeline.hset(`claude_console_account:${account.id}`, field, value)
+          }
+          await pipeline.exec()
+          logger.success(`✅ Imported Claude Console account: ${account.name} (${account.id})`)
+          stats.imported++
+        } catch (error) {
+          logger.error(`❌ Failed to import Claude Console account ${account.id}:`, error.message)
           stats.errors++
         }
       }
@@ -640,6 +731,46 @@ async function importData() {
           stats.imported++
         } catch (error) {
           logger.error(`❌ Failed to import Gemini account ${account.id}:`, error.message)
+          stats.errors++
+        }
+      }
+    }
+
+    // 导入 OpenAI Responses 账户
+    if (importDataObj.data.openaiResponsesAccounts) {
+      logger.info('\n📥 Importing OpenAI Responses accounts...')
+      for (const account of importDataObj.data.openaiResponsesAccounts) {
+        try {
+          const exists = await redis.client.exists(`openai_responses_account:${account.id}`)
+
+          if (exists && !forceOverwrite) {
+            if (skipConflicts) {
+              logger.warn(
+                `⏭️  Skipped existing OpenAI Responses account: ${account.name} (${account.id})`
+              )
+              stats.skipped++
+              continue
+            } else {
+              const overwrite = await askConfirmation(
+                `OpenAI Responses account "${account.name}" (${account.id}) exists. Overwrite?`
+              )
+              if (!overwrite) {
+                stats.skipped++
+                continue
+              }
+            }
+          }
+
+          // 使用 hset 存储到哈希表
+          const pipeline = redis.client.pipeline()
+          for (const [field, value] of Object.entries(account)) {
+            pipeline.hset(`openai_responses_account:${account.id}`, field, value)
+          }
+          await pipeline.exec()
+          logger.success(`✅ Imported OpenAI Responses account: ${account.name} (${account.id})`)
+          stats.imported++
+        } catch (error) {
+          logger.error(`❌ Failed to import OpenAI Responses account ${account.id}:`, error.message)
           stats.errors++
         }
       }
